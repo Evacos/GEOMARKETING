@@ -1,0 +1,138 @@
+---
+title: "Geomarketing project"
+author: "4club"
+date: "2024-01-24"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# CODE IN PROJECT INSTRUCTIONS
+
+Import the data
+```{r}
+load("/data/cg2023/shared/data/project/client_customers_sf.RData")
+load("/data/cg2023/shared/data/project/client_shops_sf.RData")
+load("/data/cg2023/shared/data/project/siren_competitors.RData")
+load("/data/cg2023/shared/data/project/market_potential.RData")
+```
+
+
+Graphe de la densité de pop de la région ou zone choisie
+```{r}
+iris_oc <- 
+  readRDS("/data/cg2023/shared/data/project/iris_combined.Rds") %>% 
+  filter(REG == "76") %>% 
+  st_transform(crs = "WGS84") %>% 
+  mutate(AREA = as.numeric(st_area(geometry))/1e6)
+
+shops_oc <- st_filter(client_shops,iris_oc)
+
+ggplot() +
+  geom_sf(data = iris_oc, aes(fill = P18_POP/AREA), col = NA) +
+  geom_sf(data = shops_oc, col = "white", mapping = aes(label = shop_id)) +
+  geom_sf_text(data = shops_oc, col = "white", fontface = "bold",
+               nudge_x = if_else(shops_oc$shop_id == "32", true = .15, false = -.15),
+               mapping = aes(label = shop_id)) +        
+  scale_fill_continuous_sequential(palette = "PuBuGn", name = "Population\ndensity", trans = "log10") +
+  theme_minimal() 
+```
+
+
+Rajouter dans la base pour chaque client le nombre de visites et le nombre d'achat
+```{r}
+customers_oc <- client_customers %>% 
+  filter(shop_id %in% shops_oc$shop_id) %>% 
+  st_filter(iris_oc)
+
+ctotals_oc <- customers_oc %>% 
+  st_drop_geometry() %>% 
+  group_by(shop_id) %>% 
+  summarise(oc_sales = sum(sales),
+            oc_visits = n())
+
+
+shops_oc <- left_join(shops_oc, ctotals_oc, by = "shop_id")
+shops_oc
+```
+
+
+Graphe des magasins compétitifs et leur nombre de ventes
+```{r}
+compet_oc <- st_as_sf(siren_competitors, coords = c("longitude", "latitude"), crs = "WGS84")
+compet_oc <- st_filter(compet_oc, iris_oc)
+
+# to create the buffer based on km we have to project to a different CRS
+km <- function(x) units::set_units(x, "km")
+shops_oc_zones <- 
+  st_transform(shops_oc, crs = 27563) %>% 
+  st_buffer(dist = km(25)) %>% 
+  st_transform(crs = st_crs(shops_oc))
+
+ggplot() +
+  geom_sf(data = compet_oc, col = "grey35", pch = "c") + 
+  geom_sf(aes(size = oc_sales, alpha = oc_sales), data = shops_oc, col = "red") +
+  geom_sf(data = shops_oc_zones, col = "red", lty = "dashed", fill = NA) +
+  scale_size_continuous(range = c(1,2), name = "Sales of\nour client") +
+  scale_alpha_continuous(range = c(.5,1), name = "Sales of\nour client") +
+  theme_minimal()
+```
+
+
+Ajouter les nombres agrégés de ventes observées et de clients
+```{r}
+customers_oc <- customers_oc %>% st_join(iris_oc[,"CODE_IRIS"])
+iris_oc_customers <- customers_oc %>% 
+  st_drop_geometry() %>% 
+  group_by(CODE_IRIS) %>% 
+  summarise(visits_oc = n(), sales_oc = sum(sales))
+
+iris_oc <- left_join(iris_oc, iris_oc_customers, by = "CODE_IRIS")
+iris_oc$sales_oc[is.na(iris_oc$sales_oc)] <- 0
+iris_oc$visits_oc[is.na(iris_oc$visits_oc)] <- 0
+```
+
+
+Ajouter le nombres de concurrents
+```{r}
+compet_oc <- st_join(compet_oc, iris_oc[,"CODE_IRIS"])
+iris_oc_compet <- compet_oc %>% 
+  st_drop_geometry() %>% 
+  group_by(CODE_IRIS) %>% 
+  summarise(compet = n())
+
+iris_oc <- left_join(iris_oc, iris_oc_compet, by = "CODE_IRIS")
+iris_oc$compet[is.na(iris_oc$compet)] <- 0
+```
+
+
+Graphe des 10 potentiels lieux pour y installer un nouveau magasin
+```{r}
+set.seed(123)
+new_shops <- 10
+new_shops <- sample(seq(nrow(compet_oc)), new_shops)
+new_shops <- compet_oc[new_shops,]  
+
+
+ggplot() +
+  geom_sf(data = iris_oc, aes(fill = mp), col = NA) +
+  geom_sf(data = shops_oc, col = "white") +
+  geom_sf_text(data = shops_oc, col = "white", fontface = "bold",
+               nudge_x = if_else(shops_oc$shop_id == "32", true = .15, false = -.15),
+               mapping = aes(label = shop_id)) +        
+  geom_sf(data = new_shops, col = "red") +
+  scale_fill_continuous_sequential(palette = "PuBuGn", name = "Market potential", trans = "log10") +
+  labs(y = NULL, x = NULL) +
+  theme_minimal()
+```
+
+
+
+
+
+
+
+
